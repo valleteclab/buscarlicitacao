@@ -97,6 +97,13 @@ const STATUS_COLUMNS = [
 
 const getStatusKey = (status?: string | null) => status || 'em_analise';
 
+const CONFIDENCE_FILTERS = [
+  { label: 'Todos os níveis de confiança', shortLabel: 'Todos', value: 0 },
+  { label: 'Score IA ≥ 50', shortLabel: '≥ 50', value: 50 },
+  { label: 'Score IA ≥ 70', shortLabel: '≥ 70', value: 70 },
+  { label: 'Score IA ≥ 85', shortLabel: '≥ 85', value: 85 },
+] as const;
+
 const PIPELINE_STAGE_META = {
   captada: {
     label: 'Captada',
@@ -238,9 +245,9 @@ const Licitacoes = () => {
   const [documentos, setDocumentos] = useState<Record<string, Documento[]>>({});
   const [detalhesPncp, setDetalhesPncp] = useState<Record<string, any>>({});
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<
-    'todas' | 'participando' | 'ia' | 'ia_descartadas' | 'chat_ia' | 'lixeira' | 'historico'
-  >('todas');
+  const [activeTab, setActiveTab] = useState<'todas' | 'participando' | 'chat_ia' | 'lixeira' | 'historico'>(
+    'todas',
+  );
   const [modalLicitacao, setModalLicitacao] = useState<Licitacao | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [statusFeedback, setStatusFeedback] = useState<Record<string, string | null>>({});
@@ -262,6 +269,7 @@ const Licitacoes = () => {
   const [chatIaUploadingFile, setChatIaUploadingFile] = useState(false);
   const [gestaoNotasDraft, setGestaoNotasDraft] = useState<Record<string, string>>({});
   const [pendingLicitacaoIdFromUrl, setPendingLicitacaoIdFromUrl] = useState<string | null>(null);
+  const [confidenceFilter, setConfidenceFilter] = useState<number>(0);
 
   useEffect(() => {
     checkAuth();
@@ -290,8 +298,6 @@ const Licitacoes = () => {
     if (
       tabParam === 'todas' ||
       tabParam === 'participando' ||
-      tabParam === 'ia' ||
-      tabParam === 'ia_descartadas' ||
       tabParam === 'chat_ia' ||
       tabParam === 'lixeira' ||
       tabParam === 'historico'
@@ -1384,9 +1390,6 @@ const Licitacoes = () => {
     if (!date) return '';
     const d = new Date(date);
     return d.toLocaleString('pt-BR', {
-      dateStyle: 'short',
-      timeStyle: 'short',
-    });
   };
 
   const getPriorityInfo = (licitacao: Licitacao): PriorityInfo => {
@@ -1422,22 +1425,14 @@ const Licitacoes = () => {
       }
     }
 
-    let iaScore = 0;
+    let iaBoost = 0;
     if (typeof licitacao.ia_score === 'number') {
-      if (licitacao.ia_score >= 75) {
-        iaScore = 20;
-      } else if (licitacao.ia_score >= 50) {
-        iaScore = 12;
-      } else {
-        iaScore = 5;
-      }
+      iaBoost = Math.min(licitacao.ia_score / 5, 20);
     } else if (licitacao.ia_filtrada) {
-      iaScore = 10;
-    } else if (licitacao.ia_needs_review) {
-      iaScore = 5;
+      iaBoost = 8;
     }
 
-    const totalScore = Math.round(prazoScore + valorScore + iaScore);
+    const totalScore = Math.round(prazoScore + valorScore + iaBoost);
     let level: PriorityLevel = 'baixa';
     if (totalScore >= 80) {
       level = 'alta';
@@ -1665,19 +1660,19 @@ const Licitacoes = () => {
 
   const licitacoesParticipandoGlobal = licitacoes.filter((l) => l.vai_participar);
   const licitacoesParticipando = licitacoesAtivas.filter((l) => l.vai_participar);
+  const passesConfidence = (l: Licitacao) => {
+    if (!confidenceFilter) return true;
+    return (l.ia_score ?? 0) >= confidenceFilter;
+  };
+
   const licitacoesDisponiveis = licitacoesAtivas.filter((l) => {
     const isParticipando = l.vai_participar;
     const foiClassificadaNaoRelevante = l.ia_needs_review === false && l.ia_filtrada === false;
     const estaNaLixeira = l.status_interno === 'lixeira';
-    return !isParticipando && !foiClassificadaNaoRelevante && !estaNaLixeira;
+    const passouConf = passesConfidence(l);
+    return !isParticipando && !foiClassificadaNaoRelevante && !estaNaLixeira && passouConf;
   });
-  const licitacoesIa = licitacoesAtivas.filter((l) => l.ia_filtrada && !l.vai_participar);
-  const licitacoesIaDescartadas = licitacoesAtivas.filter(
-    (l) => l.ia_needs_review === false && l.ia_filtrada === false && l.status_interno !== 'lixeira',
-  );
-  const licitacoesLixeira = licitacoesAtivas.filter(
-    (l) => l.status_interno === 'lixeira',
-  );
+  const licitacoesLixeira = licitacoesAtivas.filter((l) => l.status_interno === 'lixeira');
   const iaPendentesCount = licitacoesAtivas.filter((l) => l.ia_needs_review === true).length;
 
   const licitacoesFiltradas =
@@ -1685,13 +1680,11 @@ const Licitacoes = () => {
       ? licitacoesDisponiveis
       : activeTab === 'participando'
         ? licitacoesParticipando
-        : activeTab === 'ia'
-          ? licitacoesIa
-          : activeTab === 'lixeira'
-            ? licitacoesLixeira
-            : activeTab === 'historico'
-              ? licitacoesHistorico
-              : licitacoesIaDescartadas;
+        : activeTab === 'lixeira'
+          ? licitacoesLixeira
+          : activeTab === 'historico'
+            ? licitacoesHistorico
+            : licitacoesDisponiveis;
 
   const renderParticipandoKanban = () => (
     <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
@@ -1955,22 +1948,18 @@ const Licitacoes = () => {
             ? 'Nenhuma licitação disponível no momento'
             : activeTab === 'participando'
               ? 'Nenhuma licitação marcada para participar'
-              : activeTab === 'ia'
-                ? 'Nenhuma licitação marcada como relevante pela IA'
-                : activeTab === 'lixeira'
-                  ? 'Nenhuma licitação na lixeira'
-                  : 'Nenhuma licitação descartada pela IA'}
+              : activeTab === 'lixeira'
+                ? 'Nenhuma licitação na lixeira'
+                : 'Nenhuma licitação no histórico'}
         </p>
         <p className="text-sm text-muted-foreground">
           {activeTab === 'todas'
             ? 'Configure suas buscas e aguarde a execução automática'
             : activeTab === 'participando'
               ? 'Volte para a aba Todas para escolher novas licitações'
-              : activeTab === 'ia'
-                ? 'Clique em “Filtrar com IA” para que a IA avalie as licitações recentes.'
-                : activeTab === 'lixeira'
-                  ? 'As licitações que você envia para a lixeira ficam armazenadas aqui.'
-                  : 'Estas são licitações avaliadas e consideradas não aderentes ao seu perfil pela IA.'}
+              : activeTab === 'lixeira'
+                ? 'As licitações que você envia para a lixeira ficam armazenadas aqui.'
+                : 'Licitações cujo prazo já encerrou.'}
         </p>
       </CardContent>
     </Card>
@@ -2127,7 +2116,7 @@ const Licitacoes = () => {
           <div>
             <h2 className="text-2xl font-bold">Licitações</h2>
             <p className="text-muted-foreground text-sm">
-              {licitacoesDisponiveis.length} disponíveis • {licitacoesParticipandoGlobal.length} vou participar • {licitacoesIa.length} IA relevantes • {licitacoesIaDescartadas.length} IA descartadas • {licitacoesLixeira.length} na lixeira • {licitacoesHistorico.length} no histórico
+              {licitacoesDisponiveis.length} disponíveis • {licitacoesParticipandoGlobal.length} vou participar • {licitacoesLixeira.length} na lixeira • {licitacoesHistorico.length} no histórico
             </p>
             {iaPendentesCount > 0 ? (
               <p className="text-xs text-muted-foreground mt-1">
@@ -2162,20 +2151,6 @@ const Licitacoes = () => {
               onClick={() => setActiveTab('participando')}
             >
               Vou participar
-            </Button>
-            <Button
-              variant={activeTab === 'ia' ? 'default' : 'outline'}
-              size="sm"
-              onClick={() => setActiveTab('ia')}
-            >
-              IA
-            </Button>
-            <Button
-              variant={activeTab === 'ia_descartadas' ? 'default' : 'outline'}
-              size="sm"
-              onClick={() => setActiveTab('ia_descartadas')}
-            >
-              Descartadas IA
             </Button>
             <Button
               variant={activeTab === 'lixeira' ? 'default' : 'outline'}
@@ -2223,6 +2198,20 @@ const Licitacoes = () => {
             ))}
           </div>
         )}
+
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs text-muted-foreground">Nível mínimo de confiança da IA:</span>
+          {CONFIDENCE_FILTERS.map((filter) => (
+            <Button
+              key={filter.value}
+              size="xs"
+              variant={confidenceFilter === filter.value ? 'default' : 'outline'}
+              onClick={() => setConfidenceFilter(filter.value)}
+            >
+              {filter.label.replace('Score IA ', '')}
+            </Button>
+          ))}
+        </div>
 
         {renderContent()}
       </main>

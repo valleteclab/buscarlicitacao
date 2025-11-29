@@ -11,6 +11,190 @@ const MAX_PAGES_PER_MODALITY = 5;
 const STATUS_POSITIVE_KEYWORDS = ['divulg', 'receb', 'propost', 'abert'];
 const STATUS_NEGATIVE_KEYWORDS = ['anulad', 'revog', 'homolog', 'encerr', 'conclu', 'suspens'];
 
+const OPENROUTER_API_KEY = Deno.env.get('OPENROUTER_API_KEY');
+const OPENROUTER_MODEL = Deno.env.get('OPENROUTER_MODEL') ?? 'meta-llama/llama-3.1-8b-instruct';
+
+interface IAClassificationResult {
+  score: number;
+  justificativa: string;
+  relevante: boolean;
+  tags?: string[];
+}
+
+const buildPrompt = (licitacao: Record<string, any>, config: Record<string, any>) => {
+  const resumo = {
+    numero_controle_pncp: licitacao.numero_controle_pncp,
+    numero_compra: licitacao.numero_compra,
+    ano_compra: licitacao.ano_compra,
+    modalidade: licitacao.modalidade_nome,
+    objeto: licitacao.objeto_compra,
+    valor_total_estimado: licitacao.valor_total_estimado,
+    data_publicacao: licitacao.data_publicacao_pncp,
+    data_encerramento: licitacao.data_encerramento_proposta,
+    local:
+      licitacao.municipio_nome && licitacao.uf_sigla
+        ? `${licitacao.municipio_nome}/${licitacao.uf_sigla}`
+        : licitacao.uf_sigla,
+    orgao: licitacao.orgao_razao_social,
+  };
+
+  const keywords = Array.isArray(config?.keywords) ? config.keywords.join(', ') : 'não informadas';
+  const states = Array.isArray(config?.states) ? config.states.join(', ') : 'não definidos';
+
+  return `Você é um analista especialista em licitações e deve indicar se a oportunidade a seguir é relevante
+para o usuário com base nas palavras-chave e estados configurados.
+
+REGRAS GERAIS:
+- Atribua um score de 0 a 100 (quanto mais alto, mais relevante).
+- Considere aderência do objeto, modalidade, região e contexto geral.
+- Responda APENAS com JSON válido (sem texto extra).
+- Campos obrigatórios do JSON de resposta: {
+    "score": number,
+    "justificativa": string,
+    "relevante": boolean,
+    "tags": string[] opcional
+  }
+
+REGRAS SOBRE PALAVRAS-CHAVE:
+- NUNCA afirme que uma palavra-chave está presente se ela NÃO aparecer claramente no texto da licitação
+  (objeto ou descrição dos itens) ou em um sinônimo MUITO óbvio.
+- Se nenhuma palavra-chave (nem sinônimos óbvios) for encontrada no texto, defina:
+    "relevante": false
+    "score": no máximo 30
+- Na justificativa, explique sempre quais palavras-chave encontrou e em qual parte do texto;
+  se não encontrou nenhuma, diga explicitamente que nenhuma palavra-chave foi encontrada.
+
+REGRAS SOBRE ESTADO/REGIÃO:
+- Estados prioritários aumentam o score apenas se o conteúdo também for aderente às palavras-chave.
+- Nunca classifique como relevante apenas porque o estado é prioritário.
+
+- "relevante" deve ser true somente quando a licitação aparentar encaixar bem no contexto do usuário.
+
+Contexto do usuário:
+- Palavras-chave: ${keywords}
+- Estados prioritários: ${states}
+
+Licitação:
+${JSON.stringify(resumo, null, 2)}
+`;
+};
+
+const extractJson = (text: string): IAClassificationResult => {
+  const codeBlockMatch = text.match(/```json([\s\S]*?)```/i);
+  const raw = codeBlockMatch ? codeBlockMatch[1].trim() : text.trim();
+  const firstBrace = raw.indexOf('{');
+  const lastBrace = raw.lastIndexOf('}');
+
+  if (firstBrace === -1 || lastBrace === -1) {
+    throw new Error('Resposta do modelo não contém JSON válido.');
+  }
+
+  const jsonString = raw.slice(firstBrace, lastBrace + 1);
+  const parsed = JSON.parse(jsonString);
+
+  if (
+    typeof parsed.score !== 'number' ||
+    typeof parsed.justificativa !== 'string' ||
+    typeof parsed.relevante !== 'boolean'
+  ) {
+    throw new Error('JSON retornado não contém os campos esperados.');
+  }
+
+  return parsed as IAClassificationResult;
+};
+
+const callOpenRouter = async (prompt: string): Promise<IAClassificationResult> => {
+  if (!OPENROUTER_API_KEY) {
+    throw new Error('OPENROUTER_API_KEY não configurada');
+  }
+
+  const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+      'HTTP-Referer': 'https://buscalicitacao.local',
+      'X-Title': 'BuscaLicitacao IA Filter',
+    },
+    body: JSON.stringify({
+      model: OPENROUTER_MODEL,
+      messages: [
+        {
+          role: 'system',
+          content:
+            'Você é um analista especialista em licitações brasileiras. Sempre responda APENAS em JSON válido, sem texto extra. Nunca invente informações.',
+        },
+        {
+          role: 'user',
+          content: prompt,
+        },
+      ],
+      temperature: 0.2,
+      max_tokens: 512,
+    }),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Erro na API OpenRouter: ${response.status} - ${errorText}`);
+  }
+
+  const json = await response.json();
+  const choices = json?.choices;
+  const firstChoice = Array.isArray(choices) && choices.length > 0 ? choices[0] : null;
+  const message = firstChoice?.message;
+  const text = message && typeof message.content === 'string' ? (message.content as string) : '';
+
+  if (!text) {
+    console.warn('Resposta vazia ou inválida da OpenRouter, raw response (trunc):', JSON.stringify(json).slice(0, 1000));
+    return {
+      score: 0,
+      justificativa: 'Resposta vazia ou inválida da IA; classificado automaticamente como não relevante.',
+      relevante: false,
+      tags: ['fallback', 'invalid_response'],
+    } satisfies IAClassificationResult;
+  }
+
+  return extractJson(text);
+};
+
+const classifyLicitacaoComIA = async (
+  supabase: ReturnType<typeof createClient>,
+  licitacao: Record<string, any>,
+  config: Record<string, any>,
+) => {
+  if (!OPENROUTER_API_KEY) {
+    return;
+  }
+
+  try {
+    const prompt = buildPrompt(licitacao, config);
+    const classification = await callOpenRouter(prompt);
+
+    await supabase
+      .from('licitacoes_encontradas')
+      .update({
+        ia_score: classification.score,
+        ia_justificativa: classification.justificativa,
+        ia_filtrada: classification.relevante,
+        ia_reviewed_at: new Date().toISOString(),
+        ia_needs_review: false,
+        ia_processing_error: null,
+      })
+      .eq('id', licitacao.id);
+  } catch (error: any) {
+    console.error('Erro ao classificar licitação recém inserida', licitacao.id, error?.message || error);
+    await supabase
+      .from('licitacoes_encontradas')
+      .update({
+        ia_processing_error: error?.message || 'Erro na classificação automática',
+        ia_reviewed_at: new Date().toISOString(),
+        ia_needs_review: true,
+      })
+      .eq('id', licitacao.id);
+  }
+};
+
 interface PNCPLicitacao {
   numeroControlePNCP: string;
   numeroCompra: string;
@@ -265,6 +449,8 @@ Deno.serve(async (req) => {
                 totalLicitacoesFound++;
                 fetchedSoFar++;
                 configResultsCount++;
+
+                await classifyLicitacaoComIA(supabase, newLicitacao, config);
               } catch (error) {
                 console.error('Unexpected error inserting licitacao:', error);
               }
