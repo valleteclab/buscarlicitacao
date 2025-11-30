@@ -6,7 +6,7 @@ const corsHeaders = {
 };
 
 const OPENROUTER_API_KEY = Deno.env.get('OPENROUTER_API_KEY');
-const OPENROUTER_MODEL = Deno.env.get('OPENROUTER_MODEL') ?? 'meta-llama/llama-3.1-8b-instruct';
+const OPENROUTER_MODEL = Deno.env.get('OPENROUTER_MODEL') ?? 'x-ai/grok-4.1-fast:free';
 const IA_BATCH_SIZE = Number(Deno.env.get('IA_BATCH_SIZE') ?? '50');
 
 if (!OPENROUTER_API_KEY) {
@@ -67,9 +67,15 @@ const buildPrompt = (licitacao: LicitacaoIA) => {
   return `Você é um analista especialista em licitações e deve indicar se a oportunidade a seguir é relevante
 para o usuário com base nas palavras-chave e estados configurados.
 
-REGRAS GERAIS:
+REGRAS GERAIS (SCORE):
 - Atribua um score de 0 a 100 (quanto mais alto, mais relevante).
-- Considere aderência do objeto, modalidade, região e contexto geral.
+- Considere principalmente a aderência do OBJETO às palavras-chave da busca.
+- Use a seguinte régua:
+  - 90 a 100: objeto claramente alinhado com várias palavras-chave principais da busca.
+  - 75 a 89: objeto bem alinhado, mas não perfeito (ou parcialmente relacionado a algumas keywords).
+  - 50 a 74: relação moderada / indireta com as keywords.
+  - 31 a 49: relação fraca.
+  - 0 a 30: não aderente às keywords.
 - Responda APENAS com JSON válido (sem texto extra).
 - Campos obrigatórios do JSON de resposta: {
     "score": number,
@@ -79,13 +85,18 @@ REGRAS GERAIS:
   }
 
 REGRAS SOBRE PALAVRAS-CHAVE:
+- Leia com atenção o campo de objeto/descrição da licitação.
 - NUNCA afirme que uma palavra-chave está presente se ela NÃO aparecer claramente no texto da licitação
   (objeto ou descrição dos itens) ou em um sinônimo MUITO óbvio.
-- Se nenhuma palavra-chave (nem sinônimos óbvios) for encontrada no texto, defina:
+- Se nenhuma palavra-chave (nem sinônimos óbvios) for encontrada no texto, defina obrigatoriamente:
     "relevante": false
     "score": no máximo 30
-- Na justificativa, explique sempre quais palavras-chave encontrou e em qual parte do texto;
-  se não encontrou nenhuma, diga explicitamente que nenhuma palavra-chave foi encontrada.
+- Quando o objeto menciona de forma clara termos diretamente relacionados às keywords (por exemplo,
+  para buscas de informática/TI: "computadores", "notebooks", "desktops", "laptops", "equipamentos de TI",
+  "material de informática", "hardware", etc.), e isso estiver alinhado com as palavras-chave da busca,
+  dê preferência a scores na faixa de 85 a 100.
+- Na justificativa, explique sempre quais palavras-chave encontrou, em qual parte do texto e por que isso
+  levou ao score atribuído; se não encontrou nenhuma, diga explicitamente que nenhuma palavra-chave foi encontrada.
 
 REGRAS SOBRE ESTADO/REGIÃO:
 - Estados prioritários aumentam o score apenas se o conteúdo também for aderente às palavras-chave.

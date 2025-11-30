@@ -1386,6 +1386,33 @@ const Licitacoes = () => {
     return Math.round(diffMs / (1000 * 60 * 60 * 24));
   };
 
+  const getIaConfidenceInfo = (licitacao: Licitacao) => {
+    if (typeof licitacao.ia_score !== 'number') {
+      return null;
+    }
+
+    const score = Math.round(licitacao.ia_score);
+    let label = 'Confiança baixa';
+    let variant: 'outline' | 'default' | 'secondary' = 'outline';
+
+    if (score >= 90) {
+      label = 'Confiança muito alta';
+      variant = 'default';
+    } else if (score >= 75) {
+      label = 'Confiança alta';
+      variant = 'default';
+    } else if (score >= 50) {
+      label = 'Confiança média';
+      variant = 'secondary';
+    }
+
+    return {
+      score,
+      label,
+      variant,
+    };
+  };
+
   const formatDateTime = (date: string | null | undefined) => {
     if (!date) return '';
     const d = new Date(date);
@@ -1735,6 +1762,15 @@ const Licitacoes = () => {
                               )}
                               {renderPipelineStageBadge(pipelineStage)}
                               {renderPriorityBadge(priorityInfo)}
+                              {(() => {
+                                const info = getIaConfidenceInfo(licitacao as Licitacao);
+                                if (!info) return null;
+                                return (
+                                  <Badge variant={info.variant} className="text-[11px]">
+                                    IA: {info.score} ({info.label})
+                                  </Badge>
+                                );
+                              })()}
                             </div>
                             <CardDescription className="text-sm leading-snug">
                               {licitacao.orgao_razao_social} - {licitacao.municipio_nome}/{licitacao.uf_sigla}
@@ -1859,6 +1895,15 @@ const Licitacoes = () => {
                         )}
                         {renderPipelineStageBadge(getPipelineStage(licitacao))}
                         {renderPriorityBadge(priorityInfo)}
+                        {(() => {
+                          const info = getIaConfidenceInfo(licitacao as Licitacao);
+                          if (!info) return null;
+                          return (
+                            <Badge variant={info.variant} className="text-[11px]">
+                              IA: {info.score} ({info.label})
+                            </Badge>
+                          );
+                        })()}
                       </div>
                     </div>
                     <CardDescription className="leading-snug">
