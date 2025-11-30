@@ -28,6 +28,10 @@ interface LicitacaoIA {
   orgao_razao_social: string | null;
   raw_data: Record<string, unknown> | null;
   search_config_id: string | null;
+  vai_participar: boolean | null;
+  status_interno: string | null;
+  ia_score: number | null;
+  ia_needs_review: boolean | null;
   search_configurations?: {
     name: string;
     keywords: string[] | null;
@@ -224,9 +228,18 @@ Deno.serve(async (req) => {
         orgao_razao_social,
         raw_data,
         search_config_id,
+        vai_participar,
+        status_interno,
+        ia_score,
+        ia_needs_review,
         search_configurations ( name, keywords, states )
       `)
-      .eq('ia_needs_review', true);
+      // Apenas licitações ainda não classificadas pela IA
+      .is('ia_score', null)
+      // Exclui as que o usuário já marcou que vai participar
+      .neq('vai_participar', true)
+      // Exclui as que estão na lixeira
+      .neq('status_interno', 'lixeira');
 
     if (searchConfigId) {
       query = query.eq('search_config_id', searchConfigId);

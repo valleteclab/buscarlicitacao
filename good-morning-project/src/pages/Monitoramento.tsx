@@ -6,6 +6,7 @@ import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { Button } from '@/components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 
 interface SearchLogRow {
@@ -27,6 +28,8 @@ const Monitoramento = () => {
   const [logs, setLogs] = useState<SearchLogRow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [isRunningIA, setIsRunningIA] = useState(false);
+  const [iaMessage, setIaMessage] = useState<string | null>(null);
 
   useEffect(() => {
     const loadLogs = async () => {
@@ -83,6 +86,35 @@ const Monitoramento = () => {
     return parts.join(' • ');
   };
 
+  const handleRunIA = async () => {
+    setIsRunningIA(true);
+    setIaMessage(null);
+
+    try {
+      const { data, error } = await supabase.functions.invoke('ia-filtrar', {
+        body: {},
+      });
+
+      if (error) {
+        console.error('Erro ao executar IA em lote:', error);
+        setIaMessage(error.message || 'Erro ao executar IA em lote.');
+      } else {
+        const processed = (data as any)?.processed ?? 0;
+        const message = (data as any)?.message as string | undefined;
+        if (processed === 0 && message) {
+          setIaMessage(message);
+        } else {
+          setIaMessage(`IA executada com sucesso. Licitações processadas neste lote: ${processed}.`);
+        }
+      }
+    } catch (e: any) {
+      console.error('Erro inesperado ao chamar função ia-filtrar:', e);
+      setIaMessage(e?.message || 'Erro inesperado ao executar IA em lote.');
+    } finally {
+      setIsRunningIA(false);
+    }
+  };
+
   return (
     <div className="max-w-6xl mx-auto px-4 py-6 space-y-6">
       <div className="flex flex-col gap-2">
@@ -102,6 +134,16 @@ const Monitoramento = () => {
           <p className="text-lg font-semibold">
             {logs.reduce((acc, log) => acc + (log.results_count || 0), 0)}
           </p>
+        </div>
+        <div className="flex flex-col items-end gap-2">
+          <Button size="sm" onClick={handleRunIA} disabled={isRunningIA}>
+            {isRunningIA ? 'Executando IA em lote...' : 'Rodar IA em lote (backfill)'}
+          </Button>
+          {iaMessage && (
+            <p className="text-xs text-muted-foreground max-w-xs text-right">
+              {iaMessage}
+            </p>
+          )}
         </div>
       </Card>
 
